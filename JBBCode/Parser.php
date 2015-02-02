@@ -582,8 +582,6 @@ class Parser
      */
     protected function parseTag(ElementNode $parent, Tokenizer $tokenizer, $tagContent)
     {
-
-        $next;
         if (!$tokenizer->hasNext() || ($next = $tokenizer->next()) != ']') {
             /* This is a malformed tag. Both the previous [ and the tagContent
              * is really just plain text. */
@@ -603,12 +601,10 @@ class Parser
         // $tagPieces = explode('=', $tagContent);
         // $tmpTagName = $tagPieces[0];
 
-        $actualTagName;
+        $actualTagName = $tmpTagName;
         if ('' != $tmpTagName && '/' == $tmpTagName[0]) {
             /* This is a closing tag name. */
             $actualTagName = substr($tmpTagName, 1);
-        } else {
-            $actualTagName = $tmpTagName;
         }
 
         if ('' != $tmpTagName && '/' == $tmpTagName[0]) {
