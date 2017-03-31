@@ -33,22 +33,18 @@ class Parser
     const OPTION_STATE_QUOTED_VALUE = 4;
     const OPTION_STATE_JAVASCRIPT = 5;
 
-    /* The root element of the parse tree */
+    /** @var DocumentElement The root element of the parse tree */
     protected $treeRoot;
 
-    /* The list of bbcodes to be used by the parser. */
-    protected $bbcodes;
-
-    /* The next node id to use. This is used while parsing. */
-    protected $nextNodeid;
+    /** @var CodeDefinition[] The list of bbcodes to be used by the parser. */
+    protected $bbcodes = array();
 
     /**
      * Constructs an instance of the BBCode parser
      */
     public function __construct()
     {
-        $this->reset();
-        $this->bbcodes = array();
+        $this->treeRoot = new DocumentElement();
     }
 
     /**
@@ -61,13 +57,12 @@ class Parser
      * @param integer $nestLimit    an optional limit of the number of elements of this kind that can be nested within
      *                              each other before the parser stops parsing them.
      * @param InputValidator $optionValidator   the validator to run {option} through
-     * @param BodyValidator  $bodyValidator     the validator to run {param} through (only used if $parseContent == false)
-     * @param boolean $unary        whether the tag is unary; if it is, tag is auto-closed immediately upon another tag
+     * @param InputValidator  $bodyValidator     the validator to run {param} through (only used if $parseContent == false)
      *
      * @return Parser
      */
     public function addBBCode($tagName, $replace, $useOption = false, $parseContent = true, $nestLimit = -1,
-                              InputValidator $optionValidator = null, InputValidator $bodyValidator = null, $unary = false)
+                              InputValidator $optionValidator = null, InputValidator $bodyValidator = null)
     {
         $builder = new CodeDefinitionBuilder($tagName, $replace);
 
@@ -99,8 +94,7 @@ class Parser
      */
     public function addCodeDefinition(CodeDefinition $definition)
     {
-        array_push($this->bbcodes, $definition);
-
+        $this->bbcodes[$definition->getTagName()][$definition->usesOption()] = $definition;
         return $this;
     }
 
@@ -154,7 +148,7 @@ class Parser
     /**
      * Accepts the given NodeVisitor at the root.
      *
-     * @param NodeVisitor  a NodeVisitor
+     * @param NodeVisitor $nodeVisitor a NodeVisitor
      *
      * @return Parser
      */
@@ -230,13 +224,7 @@ class Parser
      */
     public function codeExists($tagName, $usesOption = false)
     {
-        foreach ($this->bbcodes as $code) {
-            if (strtolower($tagName) == $code->getTagName() && $usesOption == $code->usesOption()) {
-                return true;
-            }
-        }
-
-        return false;
+        return isset($this->bbcodes[strtolower($tagName)][$usesOption]);
     }
 
     /**
@@ -249,10 +237,8 @@ class Parser
      */
     public function getCode($tagName, $usesOption = false)
     {
-        foreach ($this->bbcodes as $code) {
-            if (strtolower($tagName) == $code->getTagName() && $code->usesOption() == $usesOption) {
-                return $code;
-            }
+        if($this->codeExists($tagName, $usesOption)) {
+            return $this->bbcodes[strtolower($tagName)][$usesOption];
         }
 
         return null;
@@ -275,15 +261,15 @@ class Parser
     /**
      * Creates a new text node with the given parent and text string.
      *
-     * @param $parent  the parent of the text node
-     * @param $string  the text of the text node
+     * @param ElementNode $parent  the parent of the text node
+     * @param string $string  the text of the text node
      *
      * @return TextNode the newly created TextNode
      */
     protected function createTextNode(ElementNode $parent, $string)
     {
-        if (count($parent->getChildren())) {
-            $children = $parent->getChildren();
+        $children = $parent->getChildren();
+        if (!empty($children)) {
             $lastElement = end($children);
             reset($children);
 
@@ -437,10 +423,15 @@ class Parser
                                 $buffer = "";
                                 break;
                             case ' ':
-                                $state = static::OPTION_STATE_DEFAULT;
-                                $tagName = $buffer;
-                                $buffer = '';
-                                $keys[] = $tagName;
+                                if($buffer) {
+                                    $state = static::OPTION_STATE_DEFAULT;
+                                    $tagName = $buffer;
+                                    $buffer = '';
+                                    $keys[] = $tagName;
+                                }
+                                break;
+                            case "\n":
+                            case "\r":
                                 break;
 
                             case null:
@@ -469,7 +460,8 @@ class Parser
                                 $state = static::OPTION_STATE_QUOTED_VALUE;
                                 break;
                             case null: // intentional fall-through
-                                $values[] = $buffer;
+                            case ' ': // key=value<space> delimits to next key
+                                $values[] = trim($buffer);
                                 $buffer = "";
                                 $state = static::OPTION_STATE_KEY;
                                 break;
@@ -514,7 +506,7 @@ class Parser
                         switch($char){
                             case '=':
                                 $state = static::OPTION_STATE_VALUE;
-                                $keys[] = $buffer;
+                                $keys[] = trim($buffer);
                                 $buffer = '';
                                 break;
                             case ' ': // ignore <space>key=value
@@ -535,7 +527,7 @@ class Parser
 
                                 // peek ahead. If the next character is not a space or a closing brace, we have a bad tag and need to abort
                                 if(isset($tagContent[$idx+1]) && $tagContent[$idx+1]!=" " && $tagContent[$idx+1]!="]" ){
-                                    throw new ParserException("Badly formed attribute: $tagContent");
+                                    throw new \DomainException("Badly formed attribute: $tagContent");
                                 }
                                 break;
                             default:
@@ -555,7 +547,7 @@ class Parser
                 $idx++;
             }
 
-            if(count($keys) && count($values)){
+            if(!empty($keys) && !empty($values)){
                 if(count($keys)==(count($values)+1)){
                     array_unshift($values, "");
                 }
@@ -563,7 +555,7 @@ class Parser
                 $options = array_combine($keys, $values);
             }
         }
-        catch(ParserException $e){
+        catch(\DomainException $e){
             // if we're in this state, then something evidently went wrong. We'll consider everything that came after the tagname to be the attribute for that keyname
             $options[$tagName]= substr($tagContent, strpos($tagContent, "=")+1);
         }
@@ -644,9 +636,7 @@ class Parser
             /* We have an attribute we should save. */
             $el->setAttribute($options);
         }
-
         $parent->addChild($el);
-    
         return $el;
     }
 
